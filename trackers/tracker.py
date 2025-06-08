@@ -8,18 +8,19 @@ import cv2
 import sys 
 sys.path.append('../')
 from utils import get_center_of_bbox, get_bbox_width
+from utils import Sort  # these one to assign the unique ID to each player, referee, and ball
 
 
 class Tracker:
     def __init__(self, model_path):
         self.model = YOLO(model_path) 
-        self.tracker = sv.ByteTrack()
+        self.tracker = Sort(max_age=30, min_hits=3, iou_threshold=0.3)
 
     def detect_frames(self, frames):
         batch_size=20 
         detections = [] 
         for i in range(0,len(frames),batch_size):
-            detections_batch = self.model.predict(frames[i:i+batch_size],conf=0.3)
+            detections_batch = self.model.predict(frames[i:i+batch_size],conf=0.8)  # Increased confidence
             detections += detections_batch
         return detections
     
@@ -42,7 +43,7 @@ class Tracker:
             cls_names = detection.names
             cls_names_inv = {v:k for k,v in cls_names.items()}
 
-            # Covert to supervision Detection format
+            # Convert to supervision Detection format
             detection_supervision = sv.Detections.from_ultralytics(detection)
 
             # Convert GoalKeeper to player object
@@ -50,30 +51,50 @@ class Tracker:
                 if cls_names[class_id] == "goalkeeper":
                     detection_supervision.class_id[object_ind] = cls_names_inv["player"]
 
-            # Track Objects
-            detection_with_tracks = self.tracker.update_with_detections(detection_supervision)
+            # Prepare detections for SORT (format: [x1, y1, x2, y2, confidence])
+            player_detections = []
+            referee_detections = []
+            ball_detections = []
+            
+            for i, (bbox, confidence, class_id) in enumerate(zip(
+                detection_supervision.xyxy, 
+                detection_supervision.confidence, 
+                detection_supervision.class_id
+            )):
+                detection_array = np.array([bbox[0], bbox[1], bbox[2], bbox[3], confidence])
+                
+                if class_id == cls_names_inv['player']:
+                    player_detections.append(detection_array)
+                elif class_id == cls_names_inv['referee']:
+                    referee_detections.append(detection_array)
+                elif class_id == cls_names_inv['ball']:
+                    ball_detections.append(detection_array)
 
+            # Track objects using SORT
+            if len(player_detections) > 0:
+                player_tracks = self.tracker.update(np.array(player_detections))
+            else:
+                player_tracks = np.empty((0, 5))
+
+            # Initialize frame dictionaries
             tracks["players"].append({})
             tracks["referees"].append({})
             tracks["ball"].append({})
 
-            for frame_detection in detection_with_tracks:
-                bbox = frame_detection[0].tolist()
-                cls_id = frame_detection[3]
-                track_id = frame_detection[4]
+            # Process player tracks
+            for track in player_tracks:
+                bbox = track[:4].tolist()
+                track_id = int(track[4])
+                tracks["players"][frame_num][track_id] = {"bbox": bbox}
 
-                if cls_id == cls_names_inv['player']:
-                    tracks["players"][frame_num][track_id] = {"bbox":bbox}
-                
-                if cls_id == cls_names_inv['referee']:
-                    tracks["referees"][frame_num][track_id] = {"bbox":bbox}
+            for detection_array in referee_detections:
+                bbox = detection_array[:4].tolist()
+                # Use a simple counter or index as ID for referees
+                tracks["referees"][frame_num][len(tracks["referees"][frame_num])] = {"bbox": bbox}
             
-            for frame_detection in detection_supervision:
-                bbox = frame_detection[0].tolist()
-                cls_id = frame_detection[3]
-
-                if cls_id == cls_names_inv['ball']:
-                    tracks["ball"][frame_num][1] = {"bbox":bbox}
+            for detection_array in ball_detections:
+                bbox = detection_array[:4].tolist()
+                tracks["ball"][frame_num][1] = {"bbox": bbox}
 
         if stub_path is not None:
             with open(stub_path,'wb') as f:
