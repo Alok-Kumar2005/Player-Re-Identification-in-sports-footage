@@ -1,23 +1,15 @@
 from utils import read_video, save_video
-from trackers import Tracker
+from trackers.tracker import Tracker 
 import cv2
 from team_assigner import TeamAssigner
 
 def main():
     video_frames = read_video('video/15sec_input_720p.mp4')
 
+    # Use the fixed tracker
     tracker = Tracker('model/best.pt')
 
-    tracks = tracker.get_object_tracks(video_frames, read_from_stub=True, stub_path='stubS/tracks.pkl')
-
-    ## Saving image for a player
-    # for track_id, player in tracks['players'][0].items():
-    #     bbox = player['bbox']
-    #     frame = video_frames[0]
-    #     x1, y1, x2, y2 = map(int, bbox)
-    #     player_image = frame[y1:y2, x1:x2]
-    #     cv2.imwrite(f'output_video/player_image2.jpg', player_image)
-    #     break
+    tracks = tracker.get_object_tracks(video_frames, read_from_stub=False, stub_path='stubS/tracks_fixed.pkl')
 
     # Assign Player Teams
     team_assigner = TeamAssigner()
@@ -33,12 +25,9 @@ def main():
             tracks['players'][frame_num][player_id]['team_color'] = team_assigner.team_colors[team]
 
     output_video_frames = tracker.draw_annotations(video_frames, tracks)
-    
 
-
-    ## save video
-    save_video(output_video_frames, 'output_video/output_video.avi', fps=24)
-
+    # Save video
+    save_video(output_video_frames, 'output_video/output_video_fixed.avi', fps=24)
 
 if __name__ == "__main__":
     main()
